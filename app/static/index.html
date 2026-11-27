@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ask My PDF</title>
+<style>
+  :root { --bg:#f6f7fb; --card:#fff; --text:#1d2433; --muted:#667085; --accent:#4f46e5; --border:#e4e7ec; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f1220; --card:#181c2f; --text:#e8eaf2; --muted:#9aa3b8; --accent:#818cf8; --border:#2a3050; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 80px; }
+  h1 { margin: 0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 20px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px; margin-bottom:16px; }
+  #drop { border:2px dashed var(--border); border-radius:12px; padding:28px; text-align:center; cursor:pointer; color:var(--muted); }
+  #drop.over { border-color:var(--accent); color:var(--accent); }
+  button { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:10px 16px; font-size:15px; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  input[type=text] { flex:1; padding:10px 12px; font-size:15px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--text); }
+  .row { display:flex; gap:8px; }
+  .msg { margin:12px 0; }
+  .q { font-weight:600; }
+  .a { white-space:pre-wrap; margin-top:4px; }
+  details { margin-top:8px; color:var(--muted); font-size:14px; }
+  .src { border-left:3px solid var(--accent); padding:4px 10px; margin:6px 0; }
+  .badge { font-size:12px; background:var(--border); border-radius:99px; padding:2px 8px; color:var(--muted); }
+  #status { color:var(--muted); font-size:14px; min-height:20px; }
+  .err { color:#d92d20; }
+</style>
+</head>
+<body>
+<main>
+  <h1>📄 Ask My PDF</h1>
+  <p class="sub">Upload a PDF, then ask it questions. <span id="mode" class="badge"></span></p>
+
+  <div class="card">
+    <div id="drop">Drop a PDF here or click to choose one</div>
+    <input id="file" type="file" accept="application/pdf" hidden>
+    <div id="status"></div>
+  </div>
+
+  <div class="card" id="chat" hidden>
+    <div class="row">
+      <input id="question" type="text" placeholder="Ask something about your PDF…" autocomplete="off">
+      <button id="ask">Ask</button>
+    </div>
+    <div id="log"></div>
+  </div>
+</main>
+<script>
+let docId = null;
+const $ = (id) => document.getElementById(id);
+const status = (t, err) => { $("status").textContent = t; $("status").className = err ? "err" : ""; };
+
+fetch("/health").then(r => r.json()).then(h => {
+  $("mode").textContent = h.answer_mode === "ai" ? "answers by AI" : "offline mode (no API key)";
+});
+
+$("drop").onclick = () => $("file").click();
+$("drop").ondragover = (e) => { e.preventDefault(); $("drop").classList.add("over"); };
+$("drop").ondragleave = () => $("drop").classList.remove("over");
+$("drop").ondrop = (e) => { e.preventDefault(); $("drop").classList.remove("over"); if (e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]); };
+$("file").onchange = () => { if ($("file").files[0]) upload($("file").files[0]); };
+
+async function upload(file) {
+  status("Reading " + file.name + "…");
+  const fd = new FormData(); fd.append("file", file);
+  try {
+    const r = await fetch("/upload", { method: "POST", body: fd });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || "Upload failed");
+    docId = d.doc_id;
+    status(`Ready: ${d.filename} (${d.pages} pages). Ask away!`);
+    $("chat").hidden = false; $("log").innerHTML = ""; $("question").focus();
+  } catch (e) { status(e.message, true); }
+}
+
+async function ask() {
+  const q = $("question").value.trim();
+  if (!q || !docId) return;
+  $("ask").disabled = true; $("question").value = "";
+  const box = document.createElement("div"); box.className = "msg";
+  const qEl = document.createElement("div"); qEl.className = "q"; qEl.textContent = q;
+  const aEl = document.createElement("div"); aEl.className = "a"; aEl.textContent = "Thinking…";
+  box.append(qEl, aEl); $("log").prepend(box);
+  try {
+    const r = await fetch("/ask", { method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ doc_id: docId, question: q }) });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || "Request failed");
+    aEl.textContent = d.answer;
+    if (d.sources.length) {
+      const det = document.createElement("details");
+      const sum = document.createElement("summary"); sum.textContent = `Sources (${d.sources.length})`;
+      det.append(sum);
+      d.sources.forEach(s => {
+        const p = document.createElement("div"); p.className = "src";
+        p.textContent = `Page ${s.page}: ${s.text}`; det.append(p);
+      });
+      box.append(det);
+    }
+  } catch (e) { aEl.textContent = e.message; aEl.className = "a err"; }
+  $("ask").disabled = false; $("question").focus();
+}
+$("ask").onclick = ask;
+$("question").onkeydown = (e) => { if (e.key === "Enter") ask(); };
+</script>
+</body>
+</html>
